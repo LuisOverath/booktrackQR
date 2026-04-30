@@ -1,0 +1,152 @@
+# Luis Overath,PDF von QR Code Büchern für den Druck
+#lu
+
+import io
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
+
+from qr_generation.workflow import create_qr
+from qr_generation.payload import normalize_isbn
+
+
+PAGE_WIDTH, PAGE_HEIGHT = A4
+
+# ==============================
+# ETIKETTENPAPIER - DEINE MAẞE
+# ==============================
+LABEL_WIDTH = 25.4 * mm
+LABEL_HEIGHT = 25.4 * mm
+
+COLUMNS = 6
+ROWS = 11
+LABELS_PER_PAGE = COLUMNS * ROWS
+
+LEFT_MARGIN = 16.0 * mm
+TOP_MARGIN = 9.0 * mm
+
+HORIZONTAL_GAP = 5.0 * mm
+VERTICAL_GAP = 0.0 * mm
+
+# ==============================
+# INHALT IM ETIKETT
+# ==============================
+QR_SIZE = 18.0 * mm
+TEXT_FONT = "Helvetica"
+TEXT_SIZE = 5.0
+TEXT_GAP = 0.8 * mm
+
+# Zum Testen auf True setzen, um die Etikettenrahmen zu sehen
+SHOW_LABEL_BORDERS = True
+
+
+def draw_warning_page(pdf: canvas.Canvas) -> None:
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawString(20 * mm, PAGE_HEIGHT - 30 * mm, "QR-Etiketten – BooktrackQR")
+
+    pdf.setFont("Helvetica", 11)
+    lines = [
+        "WICHTIG: Beim Drucken unbedingt '100 % / keine Anpassung' verwenden.",
+        "Vor dem Druck auf Etikettenpapier zuerst einen Testdruck auf Normalpapier machen.",
+        "Testdruck auf den Etikettenbogen legen und gegen Licht prüfen.",
+        "Ab Seite 2 beginnen die eigentlichen Etiketten.",
+    ]
+
+    y = PAGE_HEIGHT - 45 * mm
+    for line in lines:
+        pdf.drawString(20 * mm, y, line)
+        y -= 8 * mm
+
+    pdf.showPage()
+
+
+def create_qr_reader(isbn_raw: str, counter: int):
+    meta, image, _ = create_qr(isbn_raw, counter=counter, test_mode=False)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    isbn13 = normalize_isbn(isbn_raw)
+    visible_text = f"{isbn13} | {counter:05d}"
+
+    return ImageReader(buffer), meta["payload"], visible_text
+
+
+def draw_single_label(pdf: canvas.Canvas, x: float, y: float, isbn_raw: str, counter: int) -> None:
+    if SHOW_LABEL_BORDERS:
+        pdf.rect(x, y, LABEL_WIDTH, LABEL_HEIGHT)
+
+    qr_reader, _, visible_text = create_qr_reader(isbn_raw, counter)
+
+    text_width = stringWidth(visible_text, TEXT_FONT, TEXT_SIZE)
+    block_height = QR_SIZE + TEXT_GAP + TEXT_SIZE
+
+    block_y = y + (LABEL_HEIGHT - block_height) / 2
+
+    qr_x = x + (LABEL_WIDTH - QR_SIZE) / 2
+    qr_y = block_y + TEXT_SIZE + TEXT_GAP
+
+    pdf.drawImage(
+        qr_reader,
+        qr_x,
+        qr_y,
+        width=QR_SIZE,
+        height=QR_SIZE,
+        preserveAspectRatio=True,
+        mask="auto"
+    )
+
+    pdf.setFont(TEXT_FONT, TEXT_SIZE)
+    text_x = x + (LABEL_WIDTH - text_width) / 2
+    text_y = block_y
+    pdf.drawString(text_x, text_y, visible_text)
+
+
+def build_test_label_data():
+    """
+    Feste Testdaten ohne Datenbank.
+    Damit kannst du die Anordnung sicher testen.
+    """
+    label_data = []
+    base_isbn = "9783123456789"
+
+    for counter in range(1, 67):
+        label_data.append((base_isbn, counter))
+
+    return label_data
+
+
+def generate_qr_labels(label_data, output_file="qr_etiketten_herma_8831.pdf") -> None:
+    if not label_data:
+        raise ValueError("Keine Etikettendaten vorhanden.")
+
+    pdf = canvas.Canvas(output_file, pagesize=A4)
+
+    draw_warning_page(pdf)
+
+    for index, (isbn_raw, counter) in enumerate(label_data):
+        index_on_page = index % LABELS_PER_PAGE
+
+        if index > 0 and index_on_page == 0:
+            pdf.showPage()
+
+        row = index_on_page // COLUMNS
+        col = index_on_page % COLUMNS
+
+        x = LEFT_MARGIN + col * (LABEL_WIDTH + HORIZONTAL_GAP)
+        y = PAGE_HEIGHT - TOP_MARGIN - (row * (LABEL_HEIGHT + VERTICAL_GAP)) - LABEL_HEIGHT
+
+        draw_single_label(pdf, x, y, isbn_raw, counter)
+
+    pdf.save()
+    print(f"PDF erstellt: {output_file}")
+    print(f"Etiketten gesamt: {len(label_data)}")
+    print("WICHTIG: Beim Drucken 100 % / keine Anpassung verwenden.")
+
+
+if __name__ == "__main__":
+    labels = build_test_label_data()
+    generate_qr_labels(labels)
